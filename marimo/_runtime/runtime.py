@@ -2251,10 +2251,33 @@ class Kernel:
         Args:
             request: Contains the updated query parameters
         """
-        # TODO: this does not work, since its not part of the DAG / have an associated cell
-        # File "/Users/myles/code/marimo/marimo/_runtime/runtime.py", line 1448, in register_state_update
-        # assert ctx.execution_context is not None
-        query_params().set_all(request.query_params)
+        # Get the query_params state object
+        qp = self.query_params
+
+        # Update the internal state directly (without triggering state registration)
+        qp._params.clear()
+        qp._params.update(request.query_params)
+
+        # Find all global variables bound to this query_params state
+        ctx = get_context()
+        bound_variables = ctx.state_registry.bound_names(qp)
+
+        # Find all cells that reference these variables
+        cells_to_run: set[CellId_t] = set()
+        for var_name in bound_variables:
+            # Extract the actual variable name (without context prefix)
+            from marimo._runtime.state import extract_name
+            clean_var_name = extract_name(var_name)
+            cells_to_run.update(
+                self.graph.get_referring_cells(clean_var_name, language="python")
+            )
+
+        # Run the cells that depend on query_params
+        if cells_to_run:
+            await self._run_cells(
+                list(cells_to_run),
+                {cell_id: self.graph.cells[cell_id] for cell_id in cells_to_run},
+            )
 
     async def handle_message(self, request: ControlRequest) -> None:
         """Handle a message from the client.
